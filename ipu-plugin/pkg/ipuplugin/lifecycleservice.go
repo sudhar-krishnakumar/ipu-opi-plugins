@@ -47,7 +47,7 @@ type LifeCycleServiceServer struct {
 
 const (
 	hostVportId = "03"
-	accVportId  = "02"
+	accVportId  = "03"
 	deviceId    = "0x1452"
 	vendorId    = "0x8086"
 	imcAddress  = "192.168.0.1:22"
@@ -154,6 +154,7 @@ func isPF(iface string) (bool, error) {
 func getCommPf(mode string, linkList []netlink.Link) (netlink.Link, error) {
 	var pf netlink.Link
 	for i := 0; i < len(linkList); i++ {
+		fmt.Printf("i=%d, PF-> %v\n", i, linkList[i])
 		mac := linkList[i].Attrs().HardwareAddr.String()
 		octets := strings.Split(mac, ":")
 
@@ -242,6 +243,7 @@ func configureChannel(mode, daemonHostIp, daemonIpuIp string) error {
 	var pfList []netlink.Link
 
 	if err := getFilteredPFs(&pfList); err != nil {
+		fmt.Printf("configureChannel: err->%v from getFilteredPFs", err)
 		return status.Error(codes.Internal, err.Error())
 	}
 
@@ -249,10 +251,12 @@ func configureChannel(mode, daemonHostIp, daemonIpuIp string) error {
 
 	if pf == nil {
 		// Address already set - we don't proceed with setting the ip
+		fmt.Printf("configureChannel: pf nil from getCommPf")
 		return nil
 	}
 
 	if err != nil {
+		fmt.Printf("configureChannel: err->%v from getCommPf", err)
 		return status.Error(codes.Internal, err.Error())
 	}
 
@@ -265,6 +269,7 @@ func configureChannel(mode, daemonHostIp, daemonIpuIp string) error {
 	}
 
 	if err := setIP(pf, ip); err != nil {
+		fmt.Printf("configureChannel: err->%v from setIP", err)
 		return status.Error(codes.Internal, err.Error())
 	}
 
@@ -359,7 +364,7 @@ if [ -e rh_mvp.pkg ]; then
     sed -i 's/sem_num_pages = 1;/sem_num_pages = 25;/g' $CP_INIT_CFG
     sed -i 's/pf_mac_address = "00:00:00:00:03:14";/pf_mac_address = "%s";/g' $CP_INIT_CFG
     sed -i 's/acc_apf = 4;/acc_apf = 8;/g' $CP_INIT_CFG
-    sed -i 's/comm_vports = ((\[5,0\],\[4,0\]));/comm_vports = ((\[5,0\],\[4,0\]),(\[0,3\],\[4,2\]));/g' $CP_INIT_CFG
+    sed -i 's/comm_vports = ((\[5,0\],\[4,0\]));/comm_vports = ((\[5,0\],\[4,0\]),(\[0,3\],\[4,3\]));/g' $CP_INIT_CFG
 else
     echo "No custom package found. Continuing with default package"
 fi
