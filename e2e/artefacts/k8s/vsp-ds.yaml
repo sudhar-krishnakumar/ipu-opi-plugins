@@ -11,20 +11,20 @@ spec:
       labels:
         name: vsp
     spec:
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-            - matchExpressions:
-              - key: node-role.kubernetes.io/control-plane
-                operator: DoesNotExist
-              - key: node-role.kubernetes.io/master
-                operator: DoesNotExist
+      #affinity:
+        #nodeAffinity:
+        #  requiredDuringSchedulingIgnoredDuringExecution:
+        #    nodeSelectorTerms:
+        #    - matchExpressions:
+        #      - key: node-role.kubernetes.io/control-plane
+        #        operator: DoesNotExist
+        #      - key: node-role.kubernetes.io/master
+        #        operator: DoesNotExist
       hostNetwork: true
       automountServiceAccountToken: false
       containers:
       - name: appcntr1
-        image: silpixa00400458:5000/intel-ipuplugin:latest
+        image: 10.55.128.126:5000/intel-ipuplugin:latest
         imagePullPolicy: Always
         securityContext:
           privileged: true
