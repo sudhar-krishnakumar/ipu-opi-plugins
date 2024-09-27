@@ -163,11 +163,12 @@ func getCommPf(mode string, linkList []netlink.Link) (netlink.Link, error) {
 
 			// Check the 4th octet which is used to identify the PF
 			if octets[3] == accVportId {
-
+				log.Infof("Found ACC PF\n")
 				// On ACC, the 4th octet in the base mac address may already be set to accVportId and used by
 				// the another APF (i.e., the first one). If it is the first APF, then it already has an IP.
 				// Two distinguish between the two, we select the one which doesn't have an IP set already.
 				if list, _ := networkHandler.AddrList(linkList[i], netlink.FAMILY_V4); len(list) == 0 {
+					log.Infof("Found ACC PF, addr needs to be set\n")
 					pf = linkList[i]
 					break
 				}
@@ -176,8 +177,9 @@ func getCommPf(mode string, linkList []netlink.Link) (netlink.Link, error) {
 
 			// Check the 4th octet which is used to identify the PF
 			if octets[3] == hostVportId {
-
+				log.Infof("Found Host PF\n")
 				if list, _ := networkHandler.AddrList(linkList[i], netlink.FAMILY_V4); len(list) == 0 {
+					log.Infof("Found Host PF, addr needs to be set\n")
 					pf = linkList[i]
 					break
 				}
@@ -186,8 +188,11 @@ func getCommPf(mode string, linkList []netlink.Link) (netlink.Link, error) {
 	}
 
 	if pf == nil {
+		log.Infof("pf is nil for check if the ip address already set")
 		return nil, fmt.Errorf("check if the ip address already set")
 	}
+
+	log.Infof("Found PF, addr needs to be set, mode->%v\n", mode)
 
 	return pf, nil
 }
@@ -196,6 +201,7 @@ func setIP(link netlink.Link, ip string) error {
 	list, err := networkHandler.AddrList(link, netlink.FAMILY_V4)
 
 	if err != nil {
+		log.Errorf("unable to get the ip address of link: %v\n", err)
 		return fmt.Errorf("unable to get the ip address of link: %v", err)
 	}
 
@@ -204,6 +210,7 @@ func setIP(link netlink.Link, ip string) error {
 		ipAddr := net.ParseIP(ip)
 
 		if ipAddr.To4() == nil {
+			log.Errorf("not a valid IPv4 address: %v\n", err)
 			return fmt.Errorf("not a valid IPv4 address: %v", err)
 		}
 
@@ -211,12 +218,14 @@ func setIP(link netlink.Link, ip string) error {
 		addr := &netlink.Addr{IPNet: &net.IPNet{IP: ipAddr, Mask: net.CIDRMask(24, 32)}}
 
 		if err = networkHandler.AddrAdd(link, addr); err != nil {
+			log.Errorf("unable to add address: %v\n", err)
 			return fmt.Errorf("unable to add address: %v", err)
 		}
 	} else {
+		log.Errorf("address already set. Unset ip address for interface %s and run again. Len->%v\n", link.Attrs().Name, len(list))
 		return fmt.Errorf("address already set. Unset ip address for interface %s and run again", link.Attrs().Name)
 	}
-
+	log.Infof("setIP, ip->%v\n", ip)
 	return nil
 }
 
@@ -302,7 +311,7 @@ func configureChannel(mode, daemonHostIp, daemonIpuIp string) error {
 	var pfList []netlink.Link
 
 	if err := GetFilteredPFs(&pfList); err != nil {
-		fmt.Printf("configureChannel: err->%v from GetFilteredPFs", err)
+		log.Errorf("configureChannel: err->%v from GetFilteredPFs\n", err)
 		return status.Error(codes.Internal, err.Error())
 	}
 
@@ -310,12 +319,12 @@ func configureChannel(mode, daemonHostIp, daemonIpuIp string) error {
 
 	if pf == nil {
 		// Address already set - we don't proceed with setting the ip
-		fmt.Printf("configureChannel: pf nil from getCommPf\n")
+		log.Infof("configureChannel: pf nil from getCommPf\n")
 		return nil
 	}
 
 	if err != nil {
-		fmt.Printf("configureChannel: err->%v from getCommPf\n", err)
+		log.Errorf("configureChannel: err->%v from getCommPf\n", err)
 		return status.Error(codes.Internal, err.Error())
 	}
 
@@ -328,9 +337,11 @@ func configureChannel(mode, daemonHostIp, daemonIpuIp string) error {
 	}
 
 	if err := setIP(pf, ip); err != nil {
-		fmt.Printf("configureChannel: err->%v from setIP", err)
+		log.Errorf("configureChannel: err->%v from setIP\n", err)
 		return status.Error(codes.Internal, err.Error())
 	}
+
+	log.Infof("configureChannel: mode->%s\n", mode)
 
 	return nil
 }
@@ -617,8 +628,10 @@ func (s *LifeCycleServiceServer) Init(ctx context.Context, in *pb.InitRequest) (
 	checkIdpfNetDevices(s.mode)
 
 	if err := configureChannel(s.mode, s.daemonHostIp, s.daemonIpuIp); err != nil {
+		log.Errorf("Error->%v, from configureChannel\n", err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+	log.Infof("After configureChannel\n")
 
 	response := &pb.IpPort{Ip: s.daemonIpuIp, Port: int32(s.daemonPort)}
 
