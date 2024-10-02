@@ -24,7 +24,8 @@ type DevicePluginService struct {
 }
 
 var (
-	exclude          = []string{"enp0s1f0", "enp0s1f0d1", "enp0s1f0d2", "enp0s1f0d3", "enp0s1f0d4"}
+	//excluding d3(host-acc), OVS bridges->d4(br-phy-1), d5(br-phy-2) and d6 for br-vf. TODO: Do we allocate br-vf only when VF is allocated on host-side.
+	exclude          = []string{"enp0s1f0", "enp0s1f0d1", "enp0s1f0d2", "enp0s1f0d3", "enp0s1f0d4", "enp0s1f0d5", "enp0s1f0d6"}
 	sysClassNet      = "/sys/class/net"
 	sysBusPciDevices = "/sys/bus/pci/devices"
 	deviceCode       = "0x1452"
