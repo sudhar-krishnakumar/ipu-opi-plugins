@@ -19,9 +19,10 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/intel/ipu-opi-plugins/ipu-plugin/pkg/types"
+
 	pb "github.com/opiproject/opi-api/network/evpn-gw/v1alpha1/gen/go"
 	log "github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -29,6 +30,64 @@ import (
 const (
 	outerVlanId = 0 // hardcoded s-tag
 )
+
+var intfMapInit bool = false
+
+// TODO: Can be determined on-startup(GetFilteredPfs), for now, providing the actual interface names based on APF 16(in node-policy)
+// Note: These are the 3 reserved in exlude list in deviceplugin.
+var interfaces [3]string = [3]string{"enp0s1f0d4", "enp0s1f0d5", "enp0s1f0d6"}
+var intfMap map[string]bool
+
+func initMap() error {
+	if intfMapInit == false {
+		intfMap = make(map[string]bool)
+		for _, intf := range interfaces {
+			intfMap[intf] = false
+		}
+		if len(interfaces) != len(intfMap) {
+			log.Errorf("initMap setup error\n")
+			return fmt.Errorf("initMap setup error\n")
+		}
+		intfMapInit = true
+	}
+	return nil
+}
+
+// in-order(sorted by interface name->interfaces) allocation, based on available interfaces.
+func findAvailableInterface() (error, string) {
+	var intfName string = ""
+	log.Debugf("findAvailableInterface\n")
+	if intfMapInit == false {
+		initMap()
+	}
+	for _, key := range interfaces {
+		log.Debugf("intfName->%v\n", key)
+		value, present := intfMap[key]
+		if present == true && value == false {
+			log.Debugf("Found avail Intf->%v: \n", key)
+			intfMap[key] = true
+			intfName = key
+			break
+		}
+	}
+	if intfName != "" {
+		return nil, intfName
+	}
+	log.Errorf("Interface not available\n")
+	return fmt.Errorf("Interface not available\n"), intfName
+}
+
+func deleteInterfaceInMap(intfName string) error {
+	log.Debugf("deleteInterfaceInMap\n")
+	value, present := intfMap[intfName]
+	if present == true && value == true {
+		log.Debugf("Found allocated Intf->%v: \n", intfName)
+		intfMap[intfName] = false
+		return nil
+	}
+	log.Errorf("Interface->%s not found in deleteInterfaceInMap\n", intfName)
+	return fmt.Errorf("Interface->%s not found in deleteInterfaceInMap\n", intfName)
+}
 
 // CreateBridgePort executes the creation of the port
 func (s *server) CreateBridgePort(_ context.Context, in *pb.CreateBridgePortRequest) (*pb.BridgePort, error) {
@@ -60,36 +119,26 @@ func (s *server) CreateBridgePort(_ context.Context, in *pb.CreateBridgePortRequ
 	}
 
 	if isBridgePortPresent(*s, in.BridgePort.Name) {
-		return s.Ports[in.BridgePort.Name], nil
+		return s.Ports[in.BridgePort.Name].PbBrPort, nil
 	}
 
-	if !isOuterVlanSetup(s.uplinkInterface) {
-		outerVlanIntfName, err := createAndSetUpOuterVlan(s.uplinkInterface)
-		if err != nil {
-			s.log.WithField("vlan", in.BridgePort.Name).Error("unable to create outer vlan: ")
-			return nil, fmt.Errorf("unable to create bridge port: %v", err)
-		}
-
-		if err := s.bridgeCtlr.AddPort(outerVlanIntfName); err != nil {
-			return nil, fmt.Errorf("failed to add port to bridge: %v", err)
-		}
-	}
-
-	vlanIntfName, err := createAndSetUpInnerVlan(s.uplinkInterface, in.BridgePort.Spec.LogicalBridges)
+	err, intfName := findAvailableInterface()
 	if err != nil {
-		s.log.WithField("vlan", in.BridgePort.Name).Error("unable to create vlan: ")
-		return nil, fmt.Errorf("unable to create bridge port: %v", err)
+		return nil, fmt.Errorf("error from findAvailableInterface->%v", err)
+	}
+	if err := s.bridgeCtlr.AddPort(intfName); err != nil {
+		log.Errorf("failed to add port to bridge: %v, for interface->%v", err, intfName)
+		deleteInterfaceInMap(intfName)
+		return nil, fmt.Errorf("failed to add port to bridge: %v, for interface->%v", err, intfName)
 	}
 
-	if err := s.bridgeCtlr.AddPort(vlanIntfName); err != nil {
-		return nil, fmt.Errorf("failed to add port to bridge: %v", err)
-	}
 	// Add FXP rules
-	s.p4RtClient.AddRules(in.BridgePort.Spec.MacAddress, vlan)
+	s.p4RtClient.AddRules(in.BridgePort.Spec.MacAddress, vlan) //TODO: May need to pass intfName or VSI for it to p4 api.
 
 	resp := proto.Clone(in.BridgePort).(*pb.BridgePort)
 	resp.Status = &pb.BridgePortStatus{OperStatus: pb.BPOperStatus_BP_OPER_STATUS_UP}
-	s.Ports[in.BridgePort.Name] = resp
+	pbBridgePortInfo := &types.BridgePortInfo{PbBrPort: resp, PortInterface: intfName}
+	s.Ports[in.BridgePort.Name] = pbBridgePortInfo
 	return resp, nil
 }
 
@@ -99,157 +148,26 @@ func isBridgePortPresent(srv server, brPortName string) bool {
 	return ok
 }
 
-func isOuterVlanSetup(uplinkInterface string) bool {
-	// Assume that the uplink interface name is something like enp0s1f0d3
-	// take only the last two characters from the name to avoid long names limit
-	outerVlanIntfName := fmt.Sprintf("%v.%d", uplinkInterface[len(uplinkInterface)-2:], outerVlanId)
-
-	_, err := linkByNameFn(outerVlanIntfName)
-
-	return err == nil
-}
-
-func createAndSetUpOuterVlan(uplinkInterface string) (string, error) {
-	upLink, err := linkByNameFn(uplinkInterface)
-	if err != nil {
-		return "", fmt.Errorf("unable to find uplink interface: %s, because: %w", uplinkInterface, err)
-	}
-
-	// Assume that the uplink interface name is something like enp0s1f0d3
-	// take only the last two characters from the name to avoid long names limit
-	vlanIntfName := fmt.Sprintf("%v.%d", uplinkInterface[len(uplinkInterface)-2:], outerVlanId)
-
-	if err := createOuterVlanInterface(upLink, vlanIntfName, outerVlanId); err != nil {
-		return "", err
-	}
-
-	return vlanIntfName, nil
-}
-
-func createOuterVlanInterface(upLink netlink.Link, vlanIntfName string, vlanId int) error {
-
-	link, err := linkByNameFn(vlanIntfName)
-	if err == nil {
-		// If the vlan interface already exist then do nothing and return
-		if _, ok := link.(*netlink.Vlan); !ok {
-			return fmt.Errorf("an interface %s is found but not a VLAN device", vlanIntfName)
-		}
-		log.Debugf("outer vlan interface %s already exist", vlanIntfName)
-		return nil
-	}
-
-	vlan := netlink.Vlan{}
-	vlan.ParentIndex = upLink.Attrs().Index
-	vlan.Name = vlanIntfName
-	vlan.VlanId = vlanId
-	vlan.VlanProtocol = netlink.VLAN_PROTOCOL_8021AD
-
-	log.Debugf("creating a new outer vlan interface %s", vlanIntfName)
-	if err := linkAddFn(&vlan); err != nil {
-		return fmt.Errorf("error creating outer vlan interface %s: %s", vlanIntfName, err)
-	}
-	log.Debugf("outer vlan interface %s is created", vlanIntfName)
-
-	return nil
-}
-
-func createAndSetUpInnerVlan(uplinkInterface string, bridges []string) (string, error) {
-	// Assume that the uplink interface name is something like enp0s1f0d3
-	// take only the last two characters from the name to avoid long names limit
-	outerVlanIntfName := fmt.Sprintf("%v.%d", uplinkInterface[len(uplinkInterface)-2:], outerVlanId)
-
-	upLink, err := linkByNameFn(outerVlanIntfName)
-	if err != nil {
-		return "", fmt.Errorf("unable to find the outer vlan interface: %s, because: %w", outerVlanIntfName, err)
-	}
-
-	innerVlanId, err := strconv.Atoi(bridges[0])
-	if err != nil {
-		return "", fmt.Errorf("unable to parse vlan ID: %s, because: %w", bridges[0], err)
-	}
-
-	// Assume that the uplink interface name is something like enp0s1f0d3
-	// take only the last two characters from the name to avoid long names limit
-	vlanIntfName := fmt.Sprintf("%v.%d.%d", uplinkInterface[len(uplinkInterface)-2:], outerVlanId, innerVlanId)
-
-	if err := createInnerVlanInterface(upLink, vlanIntfName, innerVlanId); err != nil {
-		return "", err
-	}
-
-	return vlanIntfName, nil
-}
-
-func createInnerVlanInterface(upLink netlink.Link, vlanIntfName string, vlanId int) error {
-
-	link, err := linkByNameFn(vlanIntfName)
-	if err == nil {
-		// If the vlan interface already exist then do nothing and return
-		if _, ok := link.(*netlink.Vlan); !ok {
-			return fmt.Errorf("an interface %s is found but not a VLAN device", vlanIntfName)
-		}
-		log.Debugf("inner vlan interface %s already exist", vlanIntfName)
-		return nil
-	}
-
-	vlan := netlink.Vlan{}
-	vlan.ParentIndex = upLink.Attrs().Index
-	vlan.Name = vlanIntfName
-	vlan.VlanId = vlanId
-	vlan.VlanProtocol = netlink.VLAN_PROTOCOL_8021Q
-
-	log.Debugf("creating a new inner vlan interface %s", vlanIntfName)
-	if err := linkAddFn(&vlan); err != nil {
-		return fmt.Errorf("error creating vlan interface %s: %s", vlanIntfName, err)
-	}
-	log.Debugf("inner vlan interface %s is created", vlanIntfName)
-
-	return nil
-}
-
-func removeVlanInterface(vlanIntfName string) error {
-	// Look up interface if it exists
-	// If the vlan interface does not exist then do nothing and return
-	link, err := linkByNameFn(vlanIntfName)
-	if err != nil {
-		// Link for vlan interface is found, nothing to do
-		log.WithField("vlan", vlanIntfName).Info("interface not found to remove, may have been removed already")
-		return nil
-	}
-
-	if err := linkDelFn(link); err != nil {
-		return fmt.Errorf("error removing vlan interface %s: %s", vlanIntfName, err.Error())
-	}
-
-	return nil
-}
-
 // DeleteBridgePort deletes a port
 func (s *server) DeleteBridgePort(_ context.Context, in *pb.DeleteBridgePortRequest) (*emptypb.Empty, error) {
 	s.log.WithField("DeleteBridgePortRequest", in).Info("DeleteBridgePort")
 
 	var portInfo *pb.BridgePort
-	portInfo, ok := s.Ports[in.Name]
+	brPortInfo, ok := s.Ports[in.Name]
 	if !ok {
 		s.log.WithField("interface name", in.Name).Info("port info is not found")
 		// in such case avoid delete call loop from CNI Agent which otherwise will repeatedly call DeleteBridgePort as retry
 		return &emptypb.Empty{}, nil
 	}
+	portInfo = brPortInfo.PbBrPort
 
-	vlan := s.getFirstVlanID(portInfo.Spec.LogicalBridges)
-	vlanIntfName := fmt.Sprintf("%v.%d.%d", s.uplinkInterface[len(s.uplinkInterface)-2:], outerVlanId, vlan)
-
-	if err := s.bridgeCtlr.DeletePort(vlanIntfName); err != nil {
+	if err := s.bridgeCtlr.DeletePort(brPortInfo.PortInterface); err != nil {
 		log.Error("unable to remove port from bridge", err)
 		return nil, fmt.Errorf("failed to delete port from bridge: %v", err)
 	}
-
-	if err := removeVlanInterface(vlanIntfName); err != nil {
-		log.Error("unable to remove remove interface from host", err)
-		return nil, fmt.Errorf("failed to remove interface from host: %v", err)
-	}
-
+	deleteInterfaceInMap(brPortInfo.PortInterface)
 	// Delete FXP rules
-	s.p4RtClient.DeleteRules(portInfo.Spec.MacAddress, vlan)
+	s.p4RtClient.DeleteRules(portInfo.Spec.MacAddress, 10) //TODO: This 10 is based on vlan(MVP design), may need to pass intfName or VSI for it to p4 api.
 
 	delete(s.Ports, in.Name)
 	return &emptypb.Empty{}, nil

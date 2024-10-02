@@ -24,7 +24,8 @@ type DevicePluginService struct {
 }
 
 var (
-	exclude          = []string{"enp0s1f0", "enp0s1f0d1", "enp0s1f0d2", "enp0s1f0d3", "enp0s1f0d4"}
+	//excluding d3(host-acc), reserving D4, D5, D6 on ACC, to map to max of 3 host-side VFs....
+	exclude          = []string{"enp0s1f0", "enp0s1f0d1", "enp0s1f0d2", "enp0s1f0d3", "enp0s1f0d4", "enp0s1f0d5", "enp0s1f0d6"}
 	sysClassNet      = "/sys/class/net"
 	sysBusPciDevices = "/sys/bus/pci/devices"
 	deviceCode       = "0x1452"

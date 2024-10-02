@@ -25,7 +25,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/intel/ipu-opi-plugins/ipu-plugin/pkg/p4rtclient"
 	"github.com/intel/ipu-opi-plugins/ipu-plugin/pkg/types"
 	"github.com/intel/ipu-opi-plugins/ipu-plugin/pkg/utils"
 	pb "github.com/openshift/dpu-operator/dpu-api/gen"
@@ -47,8 +46,8 @@ type LifeCycleServiceServer struct {
 }
 
 const (
-	hostVportId         = "03"
-	accVportId          = "04"
+	hostVportId         = "02"
+	accVportId          = "03"
 	deviceId            = "0x1452"
 	vendorId            = "0x8086"
 	imcAddress          = "192.168.0.1:22"
@@ -209,7 +208,7 @@ func setIP(link netlink.Link, ip string) error {
 
 		// Set the IP address on PF
 		addr := &netlink.Addr{IPNet: &net.IPNet{IP: ipAddr, Mask: net.CIDRMask(24, 32)}}
-
+		//TODO: Add check-and-retry mechanism...to see if address got assigned.
 		if err = networkHandler.AddrAdd(link, addr); err != nil {
 			return fmt.Errorf("unable to add address: %v", err)
 		}
@@ -239,6 +238,7 @@ func GetMacforNetworkInterface(intf string, linkList []netlink.Link) (string, er
 	return "", fmt.Errorf("Couldnt find mac for interface->%v\n", intf)
 }
 
+// TODO: Can we cache 2 PF lists for host and ACC, to avoid repeated calls to GetFilteredPFs
 func GetFilteredPFs(pfList *[]netlink.Link) error {
 
 	linkList, err := networkHandler.LinkList()
@@ -256,6 +256,31 @@ func GetFilteredPFs(pfList *[]netlink.Link) error {
 	}
 
 	return nil
+}
+
+func FindInterfaceForGivenMac(macAddr string) (string, error) {
+	var pfList []netlink.Link
+	InitHandlers()
+	if err := GetFilteredPFs(&pfList); err != nil {
+		log.Errorf("FindInterfaceForGivenMac: err->%v from GetFilteredPFs", err)
+		return "", status.Error(codes.Internal, err.Error())
+	}
+
+	intfName := ""
+	found := false
+	for i := 0; i < len(pfList); i++ {
+		if pfList[i].Attrs().HardwareAddr.String() == macAddr {
+			intfName = pfList[i].Attrs().Name
+			log.Debugf("found intfName->%v for mac->%v\n", intfName, macAddr)
+			found = true
+			break
+		}
+	}
+	if found == true {
+		return intfName, nil
+	}
+	log.Errorf("Couldnt find intfName for mac->%v\n", macAddr)
+	return "", fmt.Errorf("Couldnt find intfName for mac->%v\n", macAddr)
 }
 
 /*
@@ -381,7 +406,7 @@ func (s *SSHHandlerImpl) sshFunc() error {
 	defer sftpClient.Close()
 
 	// Open the source file.
-	localFilePath := "/rh_mvp.pkg"
+	localFilePath := "/fxp-net_linux-networking-v2.pkg"
 	srcFile, err := os.Open(localFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to open local file: %s", err)
@@ -389,7 +414,7 @@ func (s *SSHHandlerImpl) sshFunc() error {
 	defer srcFile.Close()
 
 	// Create the destination file on the remote server.
-	remoteFilePath := "/work/scripts/rh_mvp.pkg"
+	remoteFilePath := "/work/scripts/fxp-net_linux-networking-v2.pkg"
 	dstFile, err := sftpClient.Create(remoteFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to create remote file: %s", err)
@@ -427,18 +452,22 @@ func (s *SSHHandlerImpl) sshFunc() error {
 		return fmt.Errorf("error from setBaseMacAddr()->%v", err)
 	}
 
+	//TODO: Change package name(fxp-net_linux-networking-v2.pkg) here and in Dockerfile according to release.
+	//TODO: Change configureChannel/setIP according to host<->ACC comm_vports.
 	shellScript := fmt.Sprintf(`#!/bin/sh
 CP_INIT_CFG=/etc/dpcp/cfg/cp_init.cfg
+cd /work/scripts
 echo "Checking for custom package..."
-if [ -e rh_mvp.pkg ]; then
-    echo "Custom package rh_mvp.pkg found. Overriding default package"
-    cp rh_mvp.pkg /etc/dpcp/package/
+if [ -e fxp-net_linux-networking-v2.pkg ]; then
+    echo "Custom package p4_custom.pkg found. Overriding default package"
+    cp  fxp-net_linux-networking-v2.pkg /etc/dpcp/package/
     rm -rf /etc/dpcp/package/default_pkg.pkg
-    ln -s /etc/dpcp/package/rh_mvp.pkg /etc/dpcp/package/default_pkg.pkg
-    sed -i 's/sem_num_pages = 1;/sem_num_pages = 25;/g' $CP_INIT_CFG
+    ln -s /etc/dpcp/package/fxp-net_linux-networking-v2.pkg /etc/dpcp/package/default_pkg.pkg
+    sed -i 's/sem_num_pages =.*;/sem_num_pages = 25;/g' $CP_INIT_CFG
+    sed -i 's/lem_num_pages =.*;/lem_num_pages = 10;/g' $CP_INIT_CFG
     sed -i 's/pf_mac_address = "00:00:00:00:03:14";/pf_mac_address = "%s";/g' $CP_INIT_CFG
-    sed -i 's/acc_apf = 4;/acc_apf = 16;/g' $CP_INIT_CFG
-    sed -i 's/comm_vports = ((\[5,0\],\[4,0\]));/comm_vports = ((\[5,0\],\[4,0\]),(\[0,3\],\[4,4\]));/g' $CP_INIT_CFG
+	sed -i 's/acc_apf = 4;/acc_apf = 16;/g' $CP_INIT_CFG
+    sed -i 's/comm_vports = .*/comm_vports = (([5,0],[4,0]),([0,3],[5,3]),([0,2],[4,3]));/g' $CP_INIT_CFG
 else
     echo "No custom package found. Continuing with default package"
 fi
@@ -585,8 +614,10 @@ func (s *FXPHandlerImpl) configureFXP(p4rtbin string) error {
 		return fmt.Errorf("no NFs initialized on the host")
 	}
 
-	p4rtclient.DeletePointToPointVFRules(p4rtbin, vfMacList)
-	p4rtclient.CreatePointToPointVFRules(p4rtbin, vfMacList)
+	//TODO: For F5, we dont support Host-VF1->Host-VF2, so we likely dont need to add all possible
+	//P4 rules...that can link any Host VF...to any other Host VF.
+	//p4rtclient.DeletePointToPointVFRules(p4rtbin, vfMacList)
+	//p4rtclient.CreatePointToPointVFRules(p4rtbin, vfMacList)
 
 	return nil
 }

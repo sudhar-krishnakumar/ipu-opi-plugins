@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/intel/ipu-opi-plugins/ipu-plugin/pkg/p4rtclient"
+	"github.com/intel/ipu-opi-plugins/ipu-plugin/pkg/types"
 	"github.com/intel/ipu-opi-plugins/ipu-plugin/pkg/utils"
 	pb "github.com/openshift/dpu-operator/dpu-api/gen"
 	"google.golang.org/grpc/codes"
@@ -26,17 +27,22 @@ import (
 
 type NetworkFunctionServiceServer struct {
 	pb.UnimplementedNetworkFunctionServiceServer
-	p4rtbin string
+	Ports      map[string]*types.BridgePortInfo
+	bridgeCtlr types.BridgeController
+	p4RtClient types.P4RTClient
+	p4rtbin    string
 }
 
-func NewNetworkFunctionService(p4rtbin string) *NetworkFunctionServiceServer {
+func NewNetworkFunctionService(ports map[string]*types.BridgePortInfo, brCtlr types.BridgeController, p4Client types.P4RTClient, p4rtbin string) *NetworkFunctionServiceServer {
 	return &NetworkFunctionServiceServer{
-		p4rtbin: p4rtbin,
+		Ports:      ports,
+		bridgeCtlr: brCtlr,
+		p4RtClient: p4Client,
+		p4rtbin:    p4rtbin,
 	}
 }
 
 func (s *NetworkFunctionServiceServer) CreateNetworkFunction(ctx context.Context, in *pb.NFRequest) (*pb.Empty, error) {
-
 	vfMacList, err := utils.GetVfMacList()
 
 	if err != nil {
@@ -47,16 +53,32 @@ func (s *NetworkFunctionServiceServer) CreateNetworkFunction(ctx context.Context
 		return nil, status.Error(codes.Internal, "No NFs initialized on the host")
 	}
 
-	// Remove point-to-point between host VFs from the FXP
-	p4rtclient.DeletePointToPointVFRules(s.p4rtbin, vfMacList)
+	ingressIntf, err := FindInterfaceForGivenMac(in.Input)
+	egressIntf, err := FindInterfaceForGivenMac(in.Output)
 
+	/* TODO: Need to do below:
+	ovs-vsctl add-port ingressIntf br-phy-1
+	ovs-vsctl add-port egressIntf br-vf
+	But need to clean-up or work-thro the existing code...in EnsureBridgeExists/LinkSideBridgeAndPortSetupForF5
+	Also not clear...if we should support NO-NF case...it will make things tricky...
+	since that would then require...default setup for link-side bridge/ports...and then undoing the setup here...
+	if NF case is deployed..
+	*/
+	/*TODO: When this call...comes here...we dont have a way to
+	find the Host-VF info....we cannot retreive it...without the key(passed by DPU in CreateBridgePort)
+	But if we try to add P4 rules...for the entire vfMacList...then we can only support 1 NF..for now...
+	Ideally...DPU needs to send Host-VF info...in this call...so we associate specific Host-VF...with NF APFs.
+	*/
+	// Remove point-to-point between host VFs from the FXP
+	//p4rtclient.DeletePointToPointVFRules(s.p4rtbin, vfMacList)
 	// Generate the P4 rules and program the FXP with NF comms
 	p4rtclient.CreateNetworkFunctionRules(s.p4rtbin, vfMacList, in.Input, in.Output)
 
 	return &pb.Empty{}, nil
 }
 
-func (s *NetworkFunctionServiceServer) DeleteNetworkFunction(ctx context.Context, in *pb.NFRequest) (*pb.Empty, error) {
+// func (s *NetworkFunctionServiceServer) DeleteNetworkFunction(ctx context.Context, in *pb.NFRequest) (*pb.Empty, error) {
+func (s *server) DeleteNetworkFunction(ctx context.Context, in *pb.NFRequest) (*pb.Empty, error) {
 
 	vfMacList, err := utils.GetVfMacList()
 

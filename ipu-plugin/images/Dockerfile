@@ -17,9 +17,11 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o bi
 FROM alpine:3@sha256:c5b1261d6d3e43071626931fc004f70149baeba2c8ec672bd4f27761f8e1ad6b
 
 COPY --from=builder /usr/src/ipu-opi-plugin/bin/ipuplugin /usr/bin/
-COPY p4-rh_mvp/rh_mvp.pkg /
+#TODO: Change package file name, according to release.
+COPY p4-linux_networking/fxp-net_linux-networking-v2.pkg /
 RUN mkdir -p /opt/p4/p4-cp-nws/bin/
 COPY bin/p4rt-ctl /opt/p4/p4-cp-nws/bin/
+#TODO: Update to newer package, according to release.
 COPY bin/p4runtime-2023.11.0-py3-none-any.whl /opt/p4/p4-cp-nws/bin/
 
 WORKDIR /
