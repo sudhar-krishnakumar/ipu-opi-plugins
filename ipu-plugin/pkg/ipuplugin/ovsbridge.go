@@ -97,11 +97,11 @@ func (b *ovsBridge) EnsureBridgeExists() error {
 	if err := utils.ExecOsCommand("ip", cmdParams...); err != nil {
 		return fmt.Errorf("error->%v, bringing UP bridge interface->%v", err.Error(), b.brVfName)
 	}
-	err := LinkSideBridgeAndPortSetupForF5(b)
+	/*err := LinkSideBridgeAndPortSetupForF5(b)
 	if err != nil {
 		log.Errorf("error from LinkSideBridgeAndPortSetupForF5->%v\n", err)
 		return fmt.Errorf("error from LinkSideBridgeAndPortSetupForF5->%v\n", err)
-	}
+	}*/
 	return nil
 }
 
@@ -125,10 +125,10 @@ func (b *ovsBridge) DeleteBridges() error {
 	if err := utils.ExecOsCommand(b.ovsCliDir+"/ovs-vsctl", brParams...); err != nil {
 		log.Errorf("error deleting ovs bridge %s with ovs-vsctl command %s", b.brVfName, err.Error())
 	}
-	err := DeleteLinkSideBridgeSetupForF5(b)
+	/*err := DeleteLinkSideBridgeSetupForF5(b)
 	if err != nil {
 		log.Errorf("error from DeleteLinkSideBridgeSetupForF5->%v\n", err)
-	}
+	}*/
 	return nil
 }
 

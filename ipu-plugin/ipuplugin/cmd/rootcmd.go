@@ -42,7 +42,7 @@ const (
 	defaultServingAddr  = "/var/run/dpu-daemon/vendor-plugin/vendor-plugin.sock"
 	defaultServingPort  = 50152
 	defaultServingProto = "unix"
-	tenantBridgeName    = "br-vf"
+	tenantBridgeName    = "br-infra"
 	defaultLogDir       = "/var/log/ipuplugin"
 	defaultBridge       = "ovs"
 	defaultBridgeIntf   = "enp0s1f0d6"

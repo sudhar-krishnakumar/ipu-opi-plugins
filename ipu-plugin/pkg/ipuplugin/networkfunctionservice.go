@@ -53,20 +53,17 @@ func (s *NetworkFunctionServiceServer) CreateNetworkFunction(ctx context.Context
 		return nil, status.Error(codes.Internal, "No NFs initialized on the host")
 	}
 
-	ingressIntf, err := FindInterfaceForGivenMac(in.Input)
-	egressIntf, err := FindInterfaceForGivenMac(in.Output)
+	//TODO: Uncomment below..
+	//ingressIntf, err := FindInterfaceForGivenMac(in.Input)
+	//egressIntf, err := FindInterfaceForGivenMac(in.Output)
 
 	/* TODO: Need to do below:
 	ovs-vsctl add-port ingressIntf br-phy-1
 	ovs-vsctl add-port egressIntf br-vf
-	But need to clean-up or work-thro the existing code...in EnsureBridgeExists/LinkSideBridgeAndPortSetupForF5
-	Also not clear...if we should support NO-NF case...it will make things tricky...
-	since that would then require...default setup for link-side bridge/ports...and then undoing the setup here...
-	if NF case is deployed..
 	*/
 	/*TODO: When this call...comes here...we dont have a way to
 	find the Host-VF info....we cannot retreive it...without the key(passed by DPU in CreateBridgePort)
-	But if we try to add P4 rules...for the entire vfMacList...then we can only support 1 NF..for now...
+	If we add P4 rules...for the entire vfMacList...then we can only support 1 NF..for now...
 	Ideally...DPU needs to send Host-VF info...in this call...so we associate specific Host-VF...with NF APFs.
 	*/
 	// Remove point-to-point between host VFs from the FXP
